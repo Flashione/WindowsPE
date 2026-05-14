@@ -1,14 +1,38 @@
-# WinPE Build Guide
+# WindowsPE
 
-Diese Anleitung beschreibt, wie das WinPE fuer WimTools lokal gebaut wurde.
+This repository contains the Windows PE boot environment documentation and the `startnet.cmd` template used by WimTools-based USB sticks.
 
-Wichtig: Das PE enthaelt nicht die eigentlichen WimTools-Skripte. Im PE liegt nur `startnet.cmd`. Die Tools liegen spaeter auf der externen beschreibbaren USB-Datenpartition unter `\WimTools`.
+The PE image is universal. It does not know whether the USB stick will start the full WimTools toolkit or the restore-only package. It only searches for an external startup router:
 
-`X:` ist das WinPE-RAM-Laufwerk. WimTools liegt niemals fest unter `X:\WimTools`.
+```text
+\start.cmd
+```
 
-## 1. Microsoft-Komponenten installieren
+That file lives on the writable USB data partition and is provided by the tool repository that is copied to the stick.
 
-Installiere auf der Windows-Build-VM die offiziellen Microsoft-Komponenten:
+## Design
+
+```text
+boot.wim
+└── X:\Windows\System32\startnet.cmd
+    └── searches C: through Z: for \start.cmd
+        └── calls \start.cmd from the detected USB data partition
+```
+
+Important:
+
+```text
+X: is the WinPE RAM drive.
+USB drive letters are not stable.
+The tools are not stored in X:.
+The PE does not hardcode WimTools or WimTools-Restore.
+```
+
+This keeps the PE reusable. The routing logic lives outside the PE in `start.cmd`, because apparently avoiding repeated `boot.wim` surgery is a thing humans must learn through pain.
+
+## Microsoft components
+
+Install the official Microsoft tools on the Windows build machine:
 
 ```text
 Windows ADK:
@@ -18,31 +42,29 @@ Windows PE Add-on:
 https://go.microsoft.com/fwlink/?linkid=2337681
 ```
 
-Beim ADK wird nur diese Komponente benoetigt:
+Required ADK feature:
 
 ```text
 Deployment Tools
 ```
 
-Danach das Windows PE Add-on installieren.
+Then install the Windows PE Add-on.
 
-## 2. Build-Shell starten
+## Build shell
 
-Starte als Administrator:
+Open as Administrator:
 
 ```text
 Deployment and Imaging Tools Environment
 ```
 
-Nicht eine normale CMD verwenden, ausser die ADK-Umgebung ist geladen. Ja, Windows macht sogar die Shell zur Stolperfalle.
-
-## 3. WinPE-Arbeitsstruktur erstellen
+## Create WinPE working directory
 
 ```bat
 copype amd64 C:\WinPE_amd64
 ```
 
-Dadurch entsteht ungefaehr:
+Created structure:
 
 ```text
 C:\WinPE_amd64\
@@ -55,7 +77,7 @@ C:\WinPE_amd64\
 └── mount\
 ```
 
-## 4. boot.wim mounten
+## Mount boot.wim
 
 ```bat
 Dism /Mount-Image ^
@@ -64,7 +86,7 @@ Dism /Mount-Image ^
  /MountDir:C:\WinPE_amd64\mount
 ```
 
-## 5. WinPE Optional Components einbauen
+## Add WinPE optional components
 
 ```bat
 set OC=C:\Program Files (x86)\Windows Kits\10\Assessment and Deployment Kit\Windows Preinstallation Environment\amd64\WinPE_OCs
@@ -80,7 +102,7 @@ Dism /Add-Package /Image:%MOUNT% /PackagePath:"%OC%\WinPE-SecureStartup.cab"
 Dism /Add-Package /Image:%MOUNT% /PackagePath:"%OC%\WinPE-SecureBootCmdlets.cab"
 ```
 
-Eingebaute Komponenten:
+Included components:
 
 ```text
 WinPE-WMI
@@ -93,139 +115,118 @@ WinPE-SecureStartup
 WinPE-SecureBootCmdlets
 ```
 
-Paketstand pruefen:
+Check package state:
 
 ```bat
 Dism /Image:C:\WinPE_amd64\mount /Get-Packages | findstr /i "WinPE"
 ```
 
-Erwartete Richtung:
+## Replace startnet.cmd
 
-```text
-Microsoft-Windows-WinPE-Package
-Microsoft-Windows-WinPE-LanguagePack-Package en-US
-WinPE-WMI-Package
-WinPE-NetFx-Package
-WinPE-Scripting-Package
-WinPE-PowerShell-Package
-WinPE-DismCmdlets-Package
-WinPE-StorageWMI-Package
-WinPE-SecureStartup-Package
-WinPE-SecureBootCmdlets-Package
-```
-
-## 6. startnet.cmd ersetzen
-
-Ersetze in der gemounteten WIM diese Datei:
+Replace this file inside the mounted image:
 
 ```text
 C:\WinPE_amd64\mount\Windows\System32\startnet.cmd
 ```
 
-mit:
+with the repository template:
 
 ```text
-WindowsPE\startnet.cmd
+startnet.cmd
 ```
 
-Beispiel:
+Example from the WindowsPE repository root:
 
 ```bat
-copy /y WindowsPE\startnet.cmd C:\WinPE_amd64\mount\Windows\System32\startnet.cmd
+copy /y startnet.cmd C:\WinPE_amd64\mount\Windows\System32\startnet.cmd
 ```
 
-Die wichtige Logik in `startnet.cmd`:
+The template does this:
 
 ```text
-1. wpeinit ausfuehren
-2. High Performance Powerplan setzen
-3. Alle Laufwerksbuchstaben nach \WimTools\WIMTOOLS.TAG durchsuchen
-4. Gefundenes Laufwerk als USBROOT verwenden
-5. \WimTools\startup.cmd vom gefundenen Laufwerk starten
-6. Bei Fehlern eine CMD offen halten
+1. Run wpeinit
+2. Set high performance power plan
+3. Search C: through Z: for \start.cmd
+4. Call \start.cmd from the detected drive
+5. Keep a command prompt open if startup fails
 ```
 
-## 7. boot.wim committen
+## Commit boot.wim
 
 ```bat
 Dism /Unmount-Image /MountDir:C:\WinPE_amd64\mount /Commit
 ```
 
-Danach liegt der fertige PE-Bootteil hier:
+The final PE boot files are then in:
 
 ```text
 C:\WinPE_amd64\media
 ```
 
-## 8. Auf USB-Stick kopieren
+## USB layout
 
-Die FAT32-Bootpartition bekommt den Inhalt von:
+Recommended two-partition USB layout:
+
+```text
+BOOT      FAT32   2 GB   Windows PE boot files
+WIMTOOLS  NTFS    Rest   tool repository content, images, captures and logs
+```
+
+Copy the content of:
 
 ```text
 C:\WinPE_amd64\media
 ```
 
-Also typischerweise:
+to the FAT32 `BOOT` partition.
+
+Copy the selected tool repository content, for example `wimtools` or `WimTools-Restore`, to the NTFS `WIMTOOLS` partition.
+
+The NTFS partition must contain:
 
 ```text
-FAT32 BOOT:
-\EFI\
-\boot\
-\sources\boot.wim
-\bootmgr
-\bootmgr.efi
+\start.cmd
 ```
 
-Die eigentlichen Tools kommen auf die NTFS-Datenpartition:
+The PE loader only requires `\start.cmd`. Everything after that is handled by the external tool repository.
+
+## Runtime examples
+
+Full WimTools USB:
 
 ```text
 NTFS WIMTOOLS:
-\WimTools\WIMTOOLS.TAG
+\start.cmd
 \WimTools\startup.cmd
-\WimTools\common\set-power.cmd
-\WimTools\Restore\WimApply.cmd
-\WimTools\Restore\Images\
-\WimTools\Capture\WimCapture.cmd
-\WimTools\drivers\
-\WimTools\StickCreator\
-```
-
-FAT32 ist nur fuer Boot. NTFS ist fuer Skripte, Images, Captures und Logs.
-
-## 9. Marker-Datei
-
-`startnet.cmd` sucht nach:
-
-```text
 \WimTools\WIMTOOLS.TAG
+\WimTools\Restore\
+\WimTools\Capture\
+\WimTools\drivers\
 ```
 
-Die Datei kann leer sein. Der Inhalt wird nicht gelesen.
-
-Beispielinhalt:
+Restore-only USB:
 
 ```text
-WimTools marker file.
-This file only has to exist.
-The content is ignored by startnet.cmd.
+NTFS WIMTOOLS:
+\start.cmd
+\WimTools\startup.cmd
+\WimTools\WIMTOOLS.TAG
+\WimTools\Recovery.wim
 ```
 
-## 10. Test-Checkliste
+## Generated files policy
+
+Do not commit generated Microsoft or image artifacts:
 
 ```text
-1. Vom USB-Stick booten
-2. WinPE startet
-3. startnet.cmd sucht WimTools
-4. \WimTools\WIMTOOLS.TAG wird gefunden
-5. \WimTools\startup.cmd wird gestartet
-6. WimTools-Menue erscheint
-```
-
-Wenn WimTools nicht gefunden wird:
-
-```text
-- Der Ordner muss exakt WimTools heissen
-- WIMTOOLS.TAG muss direkt unter \WimTools liegen
-- startup.cmd muss direkt unter \WimTools liegen
-- WimTools liegt auf der externen USB-Datenpartition, nicht auf X:
+*.wim
+*.esd
+*.iso
+*.cab
+*.msi
+C:\WinPE_amd64\
+WinPE media folders
+WinPE mount folders
+ADK installers
+PE Add-on installers
 ```
